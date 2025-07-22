@@ -10,3 +10,5 @@ build/
 
 # 排除日志文件
 *.log
+
+*.env.local

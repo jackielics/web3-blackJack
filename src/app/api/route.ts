@@ -1,71 +1,69 @@
+// save the score into the database
+// get and put score with tables in database
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
-import { verifyMessage } from "viem"
-import jwt from "jsonwebtoken"
-
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { verifyMessage } from "viem";
+import jwt from "jsonwebtoken";
 
 const client = new DynamoDBClient({
-    region: "us-east-1",
-    credentials: {
-        accessKeyId: process.env.AWS_USER_ACCESS_KEY_ID || "",
-        secretAccessKey: process.env.AWS_USER_ACCESS_KEY || ""
-    }
+  region: "us-east-1",
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+  },
 });
+const docClient = DynamoDBDocumentClient.from(client);
 
-const docClient = DynamoDBDocumentClient.from(client)
+interface DynamoItem {
+  player: string;
+  score: number;
+}
 
-const TABLE_NAME = "blackJack"
+async function putItem(item: DynamoItem) {
+  try {
+    const command = new PutCommand({
+      TableName: "blackJack",
+      Item: item,
+    });
+    await docClient.send(command);
+  } catch (error) {
+    throw new Error("Error putting item in DynamoDB: " + error);
+  }
+}
+async function getItem(player: string) {
+  try {
+    const command = new GetCommand({
+      TableName: "blackJack",
+      Key: {
+        player,
+      },
+    });
+    const resposne = await docClient.send(command);
+    return (resposne.Item as DynamoItem) || null;
+  } catch (error) {
+    throw new Error("Error getting item from DynamoDB: " + error);
+  }
+}
 
-// 写入到数据库
-async function writeScore(player: string, score: number): Promise<void>{
-    const params = {
-        TableName: TABLE_NAME,
-        Item:{
-            player: player,
-            score: score
-        }
-    };
-    try{
-        await docClient.send(new PutCommand(params));
-        console.log(`Successfully wrote score ${score} to player ${player}`)
-    }catch (error){
-        console.error(`Error writing to DynamoDB: ${error}`)
-        throw error
+async function updateScoreForPlayer(player: string, score: number) {
+  try {
+    const item = await getItem(player);
+    if (!item) {
+      await putItem({ player, score });
+    } else {
+      await putItem({ player, score });
     }
+  } catch (error) {
+    throw new Error("Error updating score for player: " + error);
+  }
 }
 
-async function readScore(player: string): Promise<number | null>{
-    const params = {
-        TableName: TABLE_NAME,
-        Key:{
-            player: player,
-        }
-    };
-
-    try{
-        const result = await docClient.send(new GetCommand(params))
-        if (result.Item){
-                console.log(`Score for Player ${player}: ${result.Item.score}`);
-                return result.Item.score as number
-        }else{
-            console.log(`No Score Found for player ${player}`)
-            return null
-        }
-    }catch(error){
-        console.error(`Error reading from DynamoDB: ${error}`)
-        throw error
-    }
-}
-
-// when the game starts, get player and dealer 2 random cards respectively
-
-import { Gaegu, Palette_Mosaic } from "next/font/google";
-import { stat } from "fs";
-
-export interface Card {
-  suit: string;
-  rank: string;
-}
+// Start the game and get 2 random cards for dealer and player
+// handle the hit and stand and decide who is the winner
 
 const suits = ["♠️", "♥️", "♦️", "♣️"];
 const ranks = [
@@ -87,72 +85,70 @@ const initialDeck = suits
   .map((suit) => ranks.map((rank) => ({ suit: suit, rank: rank })))
   .flat();
 
+export interface Card {
+  suit: string;
+  rank: string;
+}
+
 const gameState: {
-  playerHand: Card[];
   dealerHand: Card[];
+  playerHand: Card[];
   deck: Card[];
   message: string;
   score: number;
 } = {
-  playerHand: [],
   dealerHand: [],
+  playerHand: [],
   deck: initialDeck,
   message: "",
   score: 0,
 };
 
-function getRandomCards(deck: Card[], count: number) {
-  const randomIndexSet = new Set<Number>();
-  while (randomIndexSet.size < count) {
-    randomIndexSet.add(Math.floor(Math.random() * deck.length));
+function getRandomCard(deck: Card[], noOfCards: number): [Card[], Card[]] {
+  const randomeIndexSet = new Set<number>();
+  while (randomeIndexSet.size < noOfCards) {
+    const randomIndex = Math.floor(Math.random() * deck.length);
+    randomeIndexSet.add(randomIndex);
   }
-  const randomCards = deck.filter((_, index) => randomIndexSet.has(index));
-  const remainingDeck = deck.filter((_, index) => !randomIndexSet.has(index));
-  return [randomCards, remainingDeck];
+
+  const randomCards = deck.filter((_, index) => randomeIndexSet.has(index));
+  const newDeck = deck.filter((_, index) => !randomeIndexSet.has(index));
+  return [randomCards, newDeck];
 }
 
 export async function GET(request: Request) {
-    const url = new URL(request.url)
-    const address = url.searchParams.get("address")
-    if(!address){
-        return new Response(JSON.stringify({message: "address is required"}), {status: 400})
-    }
-
-  // reset the game state
-  gameState.playerHand = [];
-  gameState.dealerHand = [];
-  gameState.deck = initialDeck;
-  gameState.message = "";
-
-  const [playerCards, remainingDeck] = getRandomCards(gameState.deck, 2);
-  const [dealerCards, newDeck] = getRandomCards(remainingDeck, 2);
-
-  gameState.playerHand = playerCards;
-  gameState.dealerHand = dealerCards;
-  gameState.deck = newDeck;
-  gameState.message = "";
-
-  try{
-    const data = await readScore(address)
-    if(!data){
-        gameState.score = 0
-    }else{
-        gameState.score = data
-    }
-
-  }catch(error){
-    console.error(`Error Initializing game state ${error}`)
-    return new Response(
-        JSON.stringify({ message : "error fetching data from dynamoDB"}),
-        {status: 500});
+  const url = new URL(request.url);
+  const player = url.searchParams.get("player");
+  if (!player) {
+    return new Response(JSON.stringify({ message: "Player is required" }), {
+      status: 400,
+    });
   }
 
+  gameState.deck = [...initialDeck];
+  gameState.dealerHand = [];
+  gameState.playerHand = [];
+  gameState.message = "";
+
+  const [dealerHand, deckAfterDealer] = getRandomCard(gameState.deck, 2);
+  const [playerHand, deckAfterPlayer] = getRandomCard(deckAfterDealer, 2);
+
+  gameState.dealerHand = dealerHand;
+  gameState.playerHand = playerHand;
+  gameState.deck = deckAfterPlayer;
+
+  const response = await getItem(player);
+  if (!response) {
+    gameState.score = 0;
+  } else {
+    gameState.score = response.score;
+  }
 
   return new Response(
     JSON.stringify({
       playerHand: gameState.playerHand,
-      dealerHand: [gameState.dealerHand[0], { rank: "?", suit: "?" } as Card],
-      message: "",
+      dealerHand: [gameState.dealerHand[0], { suit: "?", rank: "?" } as Card],
+      message: gameState.message,
       score: gameState.score,
     }),
     {
@@ -161,131 +157,169 @@ export async function GET(request: Request) {
   );
 }
 
+// handle the hit and stand and decide who is the winner
 export async function POST(request: Request) {
-  const body = await request.json();
-  const { action, address } = body;
+  try {
+    // return if the action is not hit or stand
+    const body = await request.json();
+    const { action, player } = body;
 
-  if (action === 'auth'){
-    const {address, message, signature} = body
-    const isValid = await verifyMessage({ address, message, signature });
-    if(!isValid){
-        return new Response(JSON.stringify({message: "Invalid Signature"}), {status: 400})
-    }else{
-        const token = jwt.sign({address}, process.env.JWT_SECRET || "", {expiresIn: "1h"})
-        return new Response(JSON.stringify({ message: "Valid Signature" ,
-            jsonwebtoken: token
-        }), {
+    // verify if the signaure is correct
+    if (action === "auth") {
+      const { signature, message } = body;
+      const isValid = await verifyMessage({
+        address: player,
+        signature,
+        message,
+      });
+      if (isValid) {
+        const jwtToken = jwt.sign({ player }, process.env.JWT_SECRET || "", {
+          expiresIn: "1h",
+        });
+        return new Response(JSON.stringify({ token: jwtToken }), {
           status: 200,
         });
-    }
-  }
-
-  // check is the token is valid
-  const token = request.headers.get("bearer")?.split(" ")[1]
-  if(!token){
-    return new Response(JSON.stringify({message: "Token is required"}), {status: 401})
-  }
-  const decoded = jwt.verify(token, process.env.JWT_SECRET||"") as {address: string}
-  if (decoded.address.toLocaleLowerCase() != address.toLocaleLowerCase()){
-    return new Response(JSON.stringify({ message: "Invalid token" }), {
-      status: 401,
-    });
-  }
-    if (action === "hit") {
-      // when the hit is clicked, get a random card from the deck and add it to the player hand:
-      // if the player hand is greater than 21, the player loses(bust);
-      // if the player hand is less than 21, the player can continue to hit or stand;
-      // if the player hand is equal to 21, the player wins;
-
-      const [cards, newDeck] = getRandomCards(gameState.deck, 1);
-      gameState.playerHand.push(...cards);
-      gameState.deck = newDeck;
-
-      const playerHandValue = calculateHandValue(gameState.playerHand);
-      if (playerHandValue === 21) {
-        gameState.message = "Black Jack! Player wins";
-        gameState.score += 100;
-      } else if (playerHandValue > 21) {
-        gameState.message = "Bust! Player loses!";
-        gameState.score -= 100;
-      }
-    } else if (action === "stand") {
-      // when the stand is clicked, the dealer will draw cards until the dealer hand is greater than or equal to 17;
-      // if the dealer hand is greater than 21, the player wins, the dealer busts;
-      // else if the dealer hand is greater than the player hand, the dealer wins;
-      // else if the dealer hand is less than the player hand, the player wins;
-      // if the dealer hand is equal to the player hand, it's a tie;
-
-      while (calculateHandValue(gameState.dealerHand) < 17) {
-        const [randomCards, newDeck] = getRandomCards(gameState.deck, 1);
-        gameState.deck = newDeck;
-        gameState.dealerHand.push(...randomCards);
-      }
-      const dealerHandValue = calculateHandValue(gameState.dealerHand);
-      if (dealerHandValue > 21) {
-        gameState.message = "Dealer Bust! Player Wins!";
-        gameState.score += 100;
-      } else if (dealerHandValue === 21) {
-        gameState.message = "Dealer Black Jack! Player Loses!";
-        gameState.score -= 100;
       } else {
-        const playerHandValue = calculateHandValue(gameState.playerHand);
-        if (playerHandValue > dealerHandValue) {
-          gameState.message = "Player Wins!";
-          gameState.score += 100;
-        } else if (playerHandValue > dealerHandValue) {
-          gameState.message = "Player Loses";
-          gameState.score -= 100;
-        } else {
-          gameState.message = "Draw";
-        }
+        return new Response(
+          JSON.stringify({ message: "Signaure is invalid" }),
+          {
+            status: 400,
+          }
+        );
       }
-    } else {
+    }
+
+    // verify that every request has a valid token
+    const header = request.headers.get("Bearer");
+    if (!header || !header.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ message: "Unauthorized" }), {
+        status: 401,
+      });
+    }
+    const jwtToken = header.split(" ")[1];
+    const decoded = jwt.verify(jwtToken, process.env.JWT_SECRET || "") as {
+      player: string;
+    };
+    if (decoded.player.toLocaleLowerCase() !== player.toLocaleLowerCase()) {
+      return new Response(JSON.stringify({ message: "Unauthorized" }), {
+        status: 401,
+      });
+    }
+
+    // return if the current game is finished
+    if (gameState.message !== "") {
+      return new Response(
+        JSON.stringify({
+          playerHand: gameState.playerHand,
+          dealerHand: gameState.dealerHand,
+          message: gameState.message,
+        }),
+        {
+          status: 200,
+        }
+      );
+    }
+
+    // return if the action is not hit or stand
+    if (action !== "hit" && action !== "stand") {
       return new Response(JSON.stringify({ message: "Invalid action" }), {
         status: 400,
       });
     }
-  //  写入数据库
-  try {
-    await writeScore(address, gameState.score);
-  } catch (error) {
-    console.error(`Error writing to DynamoDB`, error);
-    return new Response(
-      JSON.stringify({ message: "error writing data to dynamoDB" }),
-      { status: 500 }
-    );
-  }
 
-  return new Response(
-    JSON.stringify({
-      playerHand: gameState.playerHand,
-      dealerHand:
-        gameState.message === ""
-          ? [gameState.dealerHand[0], { rank: "?", suit: "?" } as Card]
-          : gameState.dealerHand,
-      message: gameState.message,
-      score: gameState.score,
-    }),
-    { status: 200 }
-  );
+    // hit: 21 - player wins black jack
+    // hit: greater than 21 - player loses, bust
+    // hit: less than 21 = continue, update the player hand
+    if (action === "hit") {
+      const [newCard, newDeck] = getRandomCard(gameState.deck, 1);
+      gameState.playerHand.push(...newCard);
+      gameState.deck = newDeck;
+
+      const playerValue = calculateHandValue(gameState.playerHand);
+      if (playerValue > 21) {
+        gameState.message = "You lose! busts!";
+        gameState.score -= 100;
+      } else if (playerValue === 21) {
+        gameState.message = "You win! Black Jack!";
+        gameState.score += 100;
+      }
+    } else if (action === "stand") {
+      let dealerValue = calculateHandValue(gameState.dealerHand);
+      while (dealerValue < 17) {
+        const [newCard, newDeck] = getRandomCard(gameState.deck, 1);
+        gameState.dealerHand.push(...newCard);
+        gameState.deck = newDeck;
+        dealerValue = calculateHandValue(gameState.dealerHand);
+      }
+
+      const playerValue = calculateHandValue(gameState.playerHand);
+      // stand: 21 - dealer wins, black jack
+      // stand: greate than 21 - player win, dealer bust
+      // stand: less than 21 -
+      // dealer hand > player hand: dealer wins
+      // dealer hand < player hand: player wins
+      // dealer hand = player hand : draw
+
+      if (dealerValue > 21) {
+        gameState.message = "You win! Dealer busts!";
+        gameState.score += 100;
+      } else if (dealerValue === 21) {
+        gameState.message = "You lose! Black Jack!";
+        gameState.score -= 100;
+      } else {
+        if (dealerValue > playerValue) {
+          gameState.message = "You lose";
+          gameState.score -= 100;
+        } else if (dealerValue < playerValue) {
+          gameState.message = "You win";
+          gameState.score += 100;
+        } else {
+          gameState.message = "Draw!";
+        }
+      }
+    }
+
+    await updateScoreForPlayer(player, gameState.score);
+
+    return new Response(
+      JSON.stringify({
+        playerHand: gameState.playerHand,
+        dealerHand:
+          gameState.message !== ""
+            ? gameState.dealerHand
+            : [gameState.dealerHand[0], { suit: "?", rank: "?" } as Card],
+        message: gameState.message,
+        score: gameState.score,
+      }),
+      {
+        status: 200,
+      }
+    );
+  } catch (error) {
+    console.error("Error parsing request body:", error);
+    return new Response(JSON.stringify({ message: "Invalid request" }), {
+      status: 400,
+    });
+  }
 }
 
-function calculateHandValue(hand: Card[]) {
+function calculateHandValue(hand: Card[]): number {
   let value = 0;
-  let aceCount = 0;
+  let acesCount = 0;
   hand.forEach((card) => {
     if (card.rank === "A") {
+      acesCount++;
       value += 11;
-      aceCount++;
-    } else if (["J", "Q", " K"].includes(card.rank)) {
+    } else if (card.rank === "J" || card.rank === "Q" || card.rank === "K") {
       value += 10;
     } else {
       value += parseInt(card.rank);
     }
-    while (value >= 21 && aceCount > 0) {
-      value -= 10;
-      aceCount--;
-    }
   });
+
+  while (value > 21 && acesCount > 0) {
+    value -= 10;
+    acesCount--;
+  }
   return value;
 }
