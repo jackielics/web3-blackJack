@@ -1,6 +1,8 @@
 # 排除整个 node_modules 文件夹（常见于前端项目）
 node_modules/
 
+.next/
+
 # 排除 build 生成的文件
 build/
 
